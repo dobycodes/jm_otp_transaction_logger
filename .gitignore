@@ -1,0 +1,16 @@
+# Secrets
+gmail_credentials.json
+token.json
+sheets_credentials.json
+token.pickle
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+logs/
