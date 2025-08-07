@@ -6,7 +6,7 @@ from logger import setup_logger
 from excel_logger import log_otp_to_excel
 from datetime import datetime
 from duplication_check import is_recent_duplicate_transaction
-
+from config_loader import load_transaction_types
 
 # Setup
 config = load_config()
@@ -65,11 +65,29 @@ def launch_ui():
         "Employee Name"
     ]
 
+    # Create dropdown for payment types with placeholder
+    payment_options = load_transaction_types()
+    payment_options.insert(0, "Select Payment Type")  # placeholder
+    payment_var = tk.StringVar(value=payment_options[0])
+
     for label in labels:
         tk.Label(root, text=f"{label}:").pack(pady=(10, 0))
-        entry = tk.Entry(root, width=40)
-        entry.pack()
-        fields[label] = entry
+        if label == "Payment Type":
+            dropdown = tk.OptionMenu(root, payment_var, *payment_options)
+            dropdown.config(
+                width=37,
+                bg="white",
+                fg="black",
+                highlightthickness=1,
+                relief="solid"
+            )
+            dropdown.pack()
+            fields[label] = payment_var
+        else:
+            entry = tk.Entry(root, width=40)
+            entry.pack()
+            fields[label] = entry
+
 
     # OTP display
     otp_label = tk.Label(root, text="OTP: ---", font=("Helvetica", 10), fg="blue")
@@ -77,6 +95,11 @@ def launch_ui():
 
     def get_otp():
         
+        payment_type = fields["Payment Type"].get().strip()
+        if payment_type == "Select Payment Type":
+            otp_label.config(text="❌ Please select a valid payment type.")
+            logger.warning("Payment type not selected.")
+            return
 
         # Duplicate check before OTP fetch
         vehicle_number = fields["Vehicle Reg. Number"].get().strip()

@@ -15,6 +15,10 @@ REQUIRED_KEYS = {
     "gmail_credentials_path": str
 }
 
+def load_transaction_types():
+    with open("transaction_types.json", "r") as f:
+        return json.load(f)["payment_types"]
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError("Missing config.json file")
