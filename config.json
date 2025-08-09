@@ -10,5 +10,6 @@
   "sheets_credentials_path": "sheets_credentials.json",
   "gmail_credentials_path": "gmail_credentials.json",
   "amount_tolerance": 0.01,
-  "gmail_query": "label:inbox subject:OTP"
+  "gmail_query": "label:inbox subject:OTP",
+  "dry_run": false
 }

@@ -1,16 +1,27 @@
 import tkinter as tk
 import re
 from gmail_parser import fetch_latest_otps
-from config_loader import load_config
+from config_loader import load_config, load_transaction_types
 from logger import setup_logger
 from excel_logger import log_otp_to_excel
 from datetime import datetime
 from duplication_check import is_recent_duplicate_transaction
-from config_loader import load_transaction_types
+from sync_to_google import push_to_google_sheet
+from downsync_from_google import refresh_transaction_types, pull_from_google_sheet
+from pathlib import Path
+import threading
 
 # Setup
 config = load_config()
 logger = setup_logger("otp_ui")
+MASTER_SHEET_PATH = Path(config["transaction_log_excel_path"])
+
+# Globals
+root = None
+fields = {}
+payment_var = None
+dropdown = None
+otp_label = None
 
 # OTP matching logic
 def match_amount(email_amount, expected_amount, tolerance):
@@ -21,7 +32,7 @@ def match_amount(email_amount, expected_amount, tolerance):
         logger.warning(f"Amount matching failed: {e}")
         return False
 
-def get_latest_valid_otp(vehicle_reg,chassis_number, owner_name, payment_type, rto_amount, bank_amount, employee_name):
+def get_latest_valid_otp(vehicle_reg, chassis_number, owner_name, payment_type, rto_amount, bank_amount, employee_name):
     try:
         otp_entries = fetch_latest_otps()
         for entry in otp_entries:
@@ -46,28 +57,13 @@ def get_latest_valid_otp(vehicle_reg,chassis_number, owner_name, payment_type, r
         logger.error(f"OTP fetch failed: {e}")
         return None
 
-# GUI setup
-def launch_ui():
-    root = tk.Tk()
-    root.title("Secure OTP Utility")
-    root.geometry("420x500")
-    root.resizable(False, False)
-
-    # Input fields
+# Build input fields
+def build_input_fields(root, labels):
+    global payment_var, dropdown
     fields = {}
-    labels = [
-        "Vehicle Reg. Number",
-        "Chassis Number",
-        "Owner Name",
-        "Payment Type",
-        "Transaction Amount - RTO Portal",
-        "Transaction Amount including Bank Charges",
-        "Employee Name"
-    ]
 
-    # Create dropdown for payment types with placeholder
     payment_options = load_transaction_types()
-    payment_options.insert(0, "Select Payment Type")  # placeholder
+    payment_options.insert(0, "Select Payment Type")
     payment_var = tk.StringVar(value=payment_options[0])
 
     for label in labels:
@@ -88,74 +84,125 @@ def launch_ui():
             entry.pack()
             fields[label] = entry
 
+    return fields
 
-    # OTP display
+# OTP fetch logic
+def get_otp():
+    global otp_label
+
+    payment_type = fields["Payment Type"].get().strip()
+    if payment_type == "Select Payment Type":
+        otp_label.config(text="❌ Please select a valid payment type.")
+        logger.warning("Payment type not selected.")
+        return
+
+    vehicle_number = fields["Vehicle Reg. Number"].get().strip()
+    chassis_number = fields["Chassis Number"].get().strip()    
+    rto_amount = fields["Transaction Amount - RTO Portal"].get().strip()
+    bank_amount = fields["Transaction Amount including Bank Charges"].get().strip()
+
+    if not vehicle_number and not chassis_number:
+        otp_label.config(text="❌ Please enter either Vehicle Number or Chassis Number.")
+        logger.warning("Both Vehicle Number and Chassis Number are empty.")
+        return
+
+    excel_path = config["transaction_log_excel_path"]
+    if is_recent_duplicate_transaction(
+        excel_path,
+        vehicle_number,
+        chassis_number,
+        payment_type,
+        rto_amount,
+        bank_amount
+    ):
+        otp_label.config(text="⚠️ Duplicate transaction detected.\nPlease check Vehicle Number / Payment Type.")
+        logger.warning(f"Duplicate transaction detected for Vehicle: {vehicle_number} or Chassis: {chassis_number}")
+        return
+
+    data = get_latest_valid_otp(
+        vehicle_number,
+        chassis_number,
+        fields["Owner Name"].get(),
+        payment_type,
+        rto_amount,
+        bank_amount,
+        fields["Employee Name"].get()
+    )
+
+    if data:
+        otp_label.config(text=f"✅ OTP: {data['otp']}")
+        logger.info(f"OTP displayed for {data['vehicle_reg']}")
+        log_otp_to_excel(data)
+        push_to_google_sheet()
+        logger.info("OTP logged and synced to Google Sheets")
+    else:
+        otp_entries = fetch_latest_otps()
+        if otp_entries:
+            otp_label.config(text="⚠️ No OTP matched: Amount mismatch")
+            logger.warning("OTP(s) found, but none matched the bank amount")
+        else:
+            otp_label.config(text="❌ No OTP found in inbox")
+            logger.warning("No OTP emails found in inbox")
+
+def threaded_get_otp():
+    fetch_button.config(state="disabled")
+    otp_label.config(text="⏳ Fetching OTP...")
+
+    def wrapped():
+        get_otp()
+        fetch_button.config(state="normal")
+
+    threading.Thread(target=wrapped, daemon=True).start()
+
+
+# Rebuild UI
+def rebuild_ui(root):
+    global fields, otp_label, fetch_button
+
+    for widget in root.winfo_children():
+        widget.destroy()
+
+    labels = [
+        "Vehicle Reg. Number",
+        "Chassis Number",
+        "Owner Name",
+        "Payment Type",
+        "Transaction Amount - RTO Portal",
+        "Transaction Amount including Bank Charges",
+        "Employee Name"
+    ]
+
+    fields = build_input_fields(root, labels)
+
     otp_label = tk.Label(root, text="OTP: ---", font=("Helvetica", 10), fg="blue")
     otp_label.pack(pady=20)
 
-    def get_otp():
-        
-        payment_type = fields["Payment Type"].get().strip()
-        if payment_type == "Select Payment Type":
-            otp_label.config(text="❌ Please select a valid payment type.")
-            logger.warning("Payment type not selected.")
-            return
-
-        # Duplicate check before OTP fetch
-        vehicle_number = fields["Vehicle Reg. Number"].get().strip()
-        chassis_number = fields["Chassis Number"].get().strip()  # Ensure this field exists in your UI
-        payment_type = fields["Payment Type"].get().strip()
-        rto_amount = fields["Transaction Amount - RTO Portal"].get().strip()
-        bank_amount = fields["Transaction Amount including Bank Charges"].get().strip()
-
-        excel_path = "OTP_transaction_list.xlsx"
-        if is_recent_duplicate_transaction(
-            excel_path,
-            vehicle_number,
-            chassis_number,
-            payment_type,
-            rto_amount,
-            bank_amount
-        ):
-            otp_label.config(text="⚠️ Duplicate transaction detected.\nPlease check Vehicle Number / Payment Type.")
-            logger.warning(f"Duplicate transaction detected for Vehicle: {vehicle_number} or Chassis: {chassis_number}")
-            return
-
-
-        # Proceed with OTP fetch
-        data = get_latest_valid_otp(
-            fields["Vehicle Reg. Number"].get(),
-            fields["Chassis Number"].get(),
-            fields["Owner Name"].get(),
-            fields["Payment Type"].get(),
-            fields["Transaction Amount - RTO Portal"].get(),
-            fields["Transaction Amount including Bank Charges"].get(),
-            fields["Employee Name"].get()
-        )
-
-        if data:
-            otp_label.config(text=f"✅ OTP: {data['otp']}")
-            logger.info(f"OTP displayed for {data['vehicle_reg']}")
-            log_otp_to_excel(data)
-            logger.info("OTP logged to Excel")
-        else:
-            # Check if any OTPs were fetched at all
-            otp_entries = fetch_latest_otps()
-            if otp_entries:
-                otp_label.config(text="⚠️ No OTP matched: Amount mismatch")
-                logger.warning("OTP(s) found, but none matched the bank amount")
-            else:
-                otp_label.config(text="❌ No OTP found in inbox")
-                logger.warning("No OTP emails found at all")
-
-
-    def clear_form():
-        for entry in fields.values():
-            entry.delete(0, tk.END)
-        otp_label.config(text="OTP: ---")
-
-    # Buttons
-    tk.Button(root, text="Fetch OTP", command=get_otp).pack()
+    fetch_button = tk.Button(root, text="Fetch OTP", command=threaded_get_otp)
+    fetch_button.pack()
     tk.Button(root, text="Start New Entry", command=clear_form).pack(pady=10)
 
+# Clear form and refresh config
+def clear_form():
+    try:
+        pull_from_google_sheet()
+        refresh_transaction_types(
+            excel_path=MASTER_SHEET_PATH,
+            tab_name="Transaction_Types",
+            json_path=Path("transaction_types.json")
+        )
+        logger.info("✅ Config refreshed from Google Sheets")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to refresh config: {e}")
+
+    rebuild_ui(root)
+
+# Launch UI
+def launch_ui():
+    global root
+    root = tk.Tk()
+    root.title("Secure OTP Utility")
+    root.geometry("420x500")
+    root.resizable(False, False)
+
+    rebuild_ui(root)
     root.mainloop()
