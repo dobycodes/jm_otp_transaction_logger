@@ -3,7 +3,7 @@ from openpyxl import Workbook, load_workbook
 
 def log_otp_to_excel(data, file_path="OTP_transaction_list.xlsx"):
     headers = [
-        "Timestamp", "Vehicle Reg. Number","Chassis Number", "Owner Name", "Payment Type",
+        "Transaction Date", "Vehicle Reg. Number","Chassis Number", "Owner Name", "Payment Type",
         "RTO Amount", "Bank Amount", "OTP", "Employee Name",
         "Gmail Message ID", "Raw Email Body"
     ]

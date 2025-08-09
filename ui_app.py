@@ -50,7 +50,7 @@ def get_latest_valid_otp(vehicle_reg,chassis_number, owner_name, payment_type, r
 def launch_ui():
     root = tk.Tk()
     root.title("Secure OTP Utility")
-    root.geometry("400x480")
+    root.geometry("420x500")
     root.resizable(False, False)
 
     # Input fields
